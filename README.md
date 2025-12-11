@@ -1,5 +1,5 @@
 環境：Google Colab
-資料：將https://drive.google.com/drive/folders/1o1QtIsXUnIg4jwUHePUOeSwc_AGRoHIN上傳至自己的雲端硬碟
+資料：將 https://drive.google.com/drive/folders/1o1QtIsXUnIg4jwUHePUOeSwc_AGRoHIN 上傳至自己的雲端硬碟
 執行：
 !git clone https://github.com/lhy2030/STEN.git
 %cd STEN
