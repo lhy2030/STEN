@@ -16,8 +16,8 @@ from metrics import ts_metrics_enhanced
 
 dataset_root = f'./data/'
 
-# Optuna 目標函數
-def objective(trial):
+# Optuna 目標函數，加入 args 參數
+def objective(trial, args):  # 添加 args 作為參數
     # 從 Optuna 中選擇超參數
     seq_len = trial.suggest_int('seq_len', 10, 50)
     batch_size = trial.suggest_int('batch_size', 32, 128)
@@ -62,27 +62,28 @@ def objective(trial):
     return eval_metrics[0]
 
 # 創建 Optuna study
-study = optuna.create_study(direction='maximize')  # 最大化 AUROC
-study.optimize(objective, n_trials=100)  # 優化 100 次
+def run_optuna(args):
+    study = optuna.create_study(direction='maximize')  # 最大化 AUROC
+    study.optimize(lambda trial: objective(trial, args), n_trials=100)  # 優化 100 次
 
-# 顯示最佳超參數
-best_trial = study.best_trial
-print(f"Best trial: {best_trial.params}")
+    # 顯示最佳超參數
+    best_trial = study.best_trial
+    print(f"Best trial: {best_trial.params}")
 
-# 用最佳超參數進行最終模型訓練
-best_params = best_trial.params
-model_configs = {
-    'seq_len': best_params['seq_len'],
-    'stride': 1,
-    'alpha': best_params['alpha'],
-    'beta': best_params['beta'],
-    'lr': best_params['lr'],
-    'batch_size': best_params['batch_size'],
-    'epoch': 10,
-    'hidden_dim': best_params['hidden_dim']
-}
+    # 用最佳超參數進行最終模型訓練
+    best_params = best_trial.params
+    model_configs = {
+        'seq_len': best_params['seq_len'],
+        'stride': 1,
+        'alpha': best_params['alpha'],
+        'beta': best_params['beta'],
+        'lr': best_params['lr'],
+        'batch_size': best_params['batch_size'],
+        'epoch': 10,
+        'hidden_dim': best_params['hidden_dim']
+    }
 
-# 繼續從這裡開始，保留原本的參數設定和其他程式邏輯
+    return model_configs
 
 # 原本的 argparse 配置
 parser = argparse.ArgumentParser()
@@ -157,6 +158,9 @@ if not args.silent_header:
             print(f'Parameters,\t [{k}], \t\t  {model_configs[k]}', file=f)
         print(f'Note: {args.note}', file=f)
         print(f'---------------------------------------------------------', file=f)
+
+# 運行 Optuna 優化
+model_configs = run_optuna(args)
 
 # 實驗開始
 dataset_name_lst = args.dataset.split(',')
