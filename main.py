@@ -55,7 +55,7 @@ def objective(trial, args):
 
 def run_optuna(args):
     study = optuna.create_study(direction='maximize')
-    study.optimize(lambda trial: objective(trial, args), n_trials=100)  # 優化 100 次
+    study.optimize(lambda trial: objective(trial, args), n_trials=10)
 
     best_trial = study.best_trial
     print(f"Best trial: {best_trial.params}")
