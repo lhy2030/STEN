@@ -3,13 +3,10 @@
 執行：<br>
 !git clone https://github.com/lhy2030/STEN.git<br>
 %cd STEN<br>
-<br>
 !pip install torch torchvision torchaudio<br>
 !pip install numpy scipy scikit-learn pandas tqdm<br>
 !pip install optuna<br>
-<br>
 from google.colab import drive<br>
 drive.mount('/content/drive')<br>
 !ln -s /content/drive/MyDrive/STEN_dataset ./data<br>
-<br>
 !python main.py --model STEN --runs 1 --data Epilepsy
