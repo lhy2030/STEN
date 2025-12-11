@@ -16,9 +16,7 @@ from metrics import ts_metrics_enhanced
 
 dataset_root = f'./data/'
 
-# Optuna 目標函數，加入 args 參數
-def objective(trial, args):  # 添加 args 作為參數
-    # 從 Optuna 中選擇超參數
+def objective(trial, args):
     seq_len = trial.suggest_int('seq_len', 10, 50)
     batch_size = trial.suggest_int('batch_size', 32, 128)
     lr = trial.suggest_loguniform('lr', 1e-5, 1e-2)
@@ -26,23 +24,20 @@ def objective(trial, args):  # 添加 args 作為參數
     alpha = trial.suggest_uniform('alpha', 0.5, 2.0)
     beta = trial.suggest_uniform('beta', 0.5, 2.0)
 
-    # 更新模型的超參數配置
     model_configs = {
         'seq_len': seq_len,
-        'stride': 1,  # 默認 stride
+        'stride': 1,
         'alpha': alpha,
         'beta': beta,
         'lr': lr,
         'batch_size': batch_size,
-        'epoch': 10,  # 固定的 epoch 數量
+        'epoch': 10,
         'hidden_dim': hidden_dim
     }
 
-    # 加載模型
     module = imp.import_module('models')
     model_class = getattr(module, args.model)
 
-    # 加載資料集
     dataset_name = args.dataset
     data_pkg = import_ts_data_unsupervised(dataset_root, dataset_name, entities=args.entities, combine=args.entity_combined)
     train_lst, test_lst, label_lst, name_lst = data_pkg
@@ -50,27 +45,21 @@ def objective(trial, args):  # 添加 args 作為參數
     test_data = test_lst[0]
     labels = label_lst[0]
 
-    # 訓練模型
     clf = model_class(**model_configs, random_state=42)
     clf.fit(train_data)
     scores = clf.decision_function(test_data)
 
-    # 計算評估指標
     eval_metrics = ts_metrics(labels, scores)
     
-    # 返回 AUROC 作為優化目標
     return eval_metrics[0]
 
-# 創建 Optuna study
 def run_optuna(args):
-    study = optuna.create_study(direction='maximize')  # 最大化 AUROC
+    study = optuna.create_study(direction='maximize')
     study.optimize(lambda trial: objective(trial, args), n_trials=100)  # 優化 100 次
 
-    # 顯示最佳超參數
     best_trial = study.best_trial
     print(f"Best trial: {best_trial.params}")
 
-    # 用最佳超參數進行最終模型訓練
     best_params = best_trial.params
     model_configs = {
         'seq_len': best_params['seq_len'],
@@ -85,7 +74,6 @@ def run_optuna(args):
 
     return model_configs
 
-# 原本的 argparse 配置
 parser = argparse.ArgumentParser()
 parser.add_argument("--runs", type=int, default=5,
                     help="how many times we repeat the experiments to "
@@ -118,11 +106,9 @@ parser.add_argument('--delta', type=float, default=0.6)
 
 args = parser.parse_args()
 
-# 模型設定
 module = imp.import_module('models')
 model_class = getattr(module, args.model)
 
-# 配置檔案讀取
 path = 'configs.yaml'
 with open(path) as f:
     d = yaml.safe_load(f)
@@ -132,7 +118,6 @@ with open(path) as f:
         print(f'config file does not contain default parameter settings of {args.model}')
         model_configs = {}
 
-# 根據 argparse 的參數更新配置
 model_configs['seq_len'] = args.seq_len
 model_configs['stride'] = args.stride
 model_configs['alpha'] = args.alpha
@@ -144,12 +129,10 @@ model_configs['hidden_dim'] = args.hidden_dim
 
 print(f'Model Configs: {model_configs}')
 
-# 結果儲存路徑設定
 cur_time = time.strftime("%m-%d %H.%M.%S", time.localtime())
 os.makedirs(args.output_dir, exist_ok=True)
 result_file = os.path.join(args.output_dir, f'{args.model}.{args.flag}.csv')
 
-# 記錄實驗資料
 if not args.silent_header:
     with open(result_file, 'a') as f:
         print('\n---------------------------------------------------------', file=f)
@@ -159,10 +142,8 @@ if not args.silent_header:
         print(f'Note: {args.note}', file=f)
         print(f'---------------------------------------------------------', file=f)
 
-# 運行 Optuna 優化
 model_configs = run_optuna(args)
 
-# 實驗開始
 dataset_name_lst = args.dataset.split(',')
 for dataset in dataset_name_lst:
     entity_metric_lst = []
@@ -221,3 +202,5 @@ for dataset in dataset_name_lst:
                    avg_entries[10], std_entries[10], np.average(t_lst), args.model, str(model_configs))
             print(txt)
             print(txt, file=f)
+
+            f.close()
