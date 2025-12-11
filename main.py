@@ -6,6 +6,8 @@ import argparse
 import yaml
 import time
 import importlib as imp
+import optuna
+import numpy as np
 from utils.dataloading import import_ts_data_unsupervised
 from metrics import ts_metrics, point_adjustment
 from metrics.metrics import *
@@ -14,6 +16,75 @@ from metrics import ts_metrics_enhanced
 
 dataset_root = f'./data/'
 
+# Optuna 目標函數
+def objective(trial):
+    # 從 Optuna 中選擇超參數
+    seq_len = trial.suggest_int('seq_len', 10, 50)
+    batch_size = trial.suggest_int('batch_size', 32, 128)
+    lr = trial.suggest_loguniform('lr', 1e-5, 1e-2)
+    hidden_dim = trial.suggest_int('hidden_dim', 128, 512)
+    alpha = trial.suggest_uniform('alpha', 0.5, 2.0)
+    beta = trial.suggest_uniform('beta', 0.5, 2.0)
+
+    # 更新模型的超參數配置
+    model_configs = {
+        'seq_len': seq_len,
+        'stride': 1,  # 默認 stride
+        'alpha': alpha,
+        'beta': beta,
+        'lr': lr,
+        'batch_size': batch_size,
+        'epoch': 10,  # 固定的 epoch 數量
+        'hidden_dim': hidden_dim
+    }
+
+    # 加載模型
+    module = imp.import_module('models')
+    model_class = getattr(module, args.model)
+
+    # 加載資料集
+    dataset_name = args.dataset
+    data_pkg = import_ts_data_unsupervised(dataset_root, dataset_name, entities=args.entities, combine=args.entity_combined)
+    train_lst, test_lst, label_lst, name_lst = data_pkg
+    train_data = train_lst[0]
+    test_data = test_lst[0]
+    labels = label_lst[0]
+
+    # 訓練模型
+    clf = model_class(**model_configs, random_state=42)
+    clf.fit(train_data)
+    scores = clf.decision_function(test_data)
+
+    # 計算評估指標
+    eval_metrics = ts_metrics(labels, scores)
+    
+    # 返回 AUROC 作為優化目標
+    return eval_metrics[0]
+
+# 創建 Optuna study
+study = optuna.create_study(direction='maximize')  # 最大化 AUROC
+study.optimize(objective, n_trials=100)  # 優化 100 次
+
+# 顯示最佳超參數
+best_trial = study.best_trial
+print(f"Best trial: {best_trial.params}")
+
+# 用最佳超參數進行最終模型訓練
+best_params = best_trial.params
+model_configs = {
+    'seq_len': best_params['seq_len'],
+    'stride': 1,
+    'alpha': best_params['alpha'],
+    'beta': best_params['beta'],
+    'lr': best_params['lr'],
+    'batch_size': best_params['batch_size'],
+    'epoch': 10,
+    'hidden_dim': best_params['hidden_dim']
+}
+
+# 繼續從這裡開始，保留原本的參數設定和其他程式邏輯
+
+# 原本的 argparse 配置
 parser = argparse.ArgumentParser()
 parser.add_argument("--runs", type=int, default=5,
                     help="how many times we repeat the experiments to "
@@ -46,9 +117,11 @@ parser.add_argument('--delta', type=float, default=0.6)
 
 args = parser.parse_args()
 
+# 模型設定
 module = imp.import_module('models')
 model_class = getattr(module, args.model)
-#
+
+# 配置檔案讀取
 path = 'configs.yaml'
 with open(path) as f:
     d = yaml.safe_load(f)
@@ -58,6 +131,7 @@ with open(path) as f:
         print(f'config file does not contain default parameter settings of {args.model}')
         model_configs = {}
 
+# 根據 argparse 的參數更新配置
 model_configs['seq_len'] = args.seq_len
 model_configs['stride'] = args.stride
 model_configs['alpha'] = args.alpha
@@ -69,58 +143,48 @@ model_configs['hidden_dim'] = args.hidden_dim
 
 print(f'Model Configs: {model_configs}')
 
+# 結果儲存路徑設定
 cur_time = time.strftime("%m-%d %H.%M.%S", time.localtime())
 os.makedirs(args.output_dir, exist_ok=True)
 result_file = os.path.join(args.output_dir, f'{args.model}.{args.flag}.csv')
 
+# 記錄實驗資料
 if not args.silent_header:
-    f = open(result_file, 'a')
-    print('\n---------------------------------------------------------', file=f)
-    print(f'model: {args.model}, dataset: {args.dataset}, '
-          f'{args.runs}runs, {cur_time}', file=f)
-    for k in model_configs.keys():
-        print(f'Parameters,\t [{k}], \t\t  {model_configs[k]}', file=f)
-    print(f'Note: {args.note}', file=f)
-    print(f'---------------------------------------------------------', file=f)
-    f.close()
+    with open(result_file, 'a') as f:
+        print('\n---------------------------------------------------------', file=f)
+        print(f'model: {args.model}, dataset: {args.dataset}, {args.runs} runs, {cur_time}', file=f)
+        for k in model_configs.keys():
+            print(f'Parameters,\t [{k}], \t\t  {model_configs[k]}', file=f)
+        print(f'Note: {args.note}', file=f)
+        print(f'---------------------------------------------------------', file=f)
 
+# 實驗開始
 dataset_name_lst = args.dataset.split(',')
-
-
 for dataset in dataset_name_lst:
     entity_metric_lst = []
     entity_metric_std_lst = []
-    data_pkg = import_ts_data_unsupervised(dataset_root,
-                                           dataset, entities=args.entities,
-                                           combine=args.entity_combined)
+    data_pkg = import_ts_data_unsupervised(dataset_root, dataset, entities=args.entities, combine=args.entity_combined)
     train_lst, test_lst, label_lst, name_lst = data_pkg
 
     for train_data, test_data, labels, dataset_name in zip(train_lst, test_lst, label_lst, name_lst):
         entries = []
         t_lst = []
-        origin_entries = []
-        new_eval_info_entries = []
-        new_eval_info_metrics_entries = []
-        runs = args.runs
-
-        for i in range(runs):
+        for i in range(args.runs):
             start_time = time.time()
             print(f'\nRunning [{i + 1}/{args.runs}] of [{args.model}] on Dataset [{dataset_name}]')
 
-            t1 = time.time()
             clf = model_class(**model_configs, random_state=42 + i)
-
             clf.fit(train_data)
             scores = clf.decision_function(test_data)
 
-            t = time.time() - t1
-
+            t = time.time() - start_time
             eval_metrics = ts_metrics(labels, scores)
             adj_eval_metrics_raw = ts_metrics(labels, point_adjustment(labels, scores))
 
             anormly_ratio = args.delta
             thresh = np.percentile(scores, 100 - anormly_ratio)
             print("Threshold :", thresh)
+
             gt = labels.astype(int)
             pred = (scores > thresh).astype(int)
 
@@ -132,30 +196,24 @@ for dataset in dataset_name_lst:
             print(txt)
 
             adj_eval_metrics = ts_metrics_enhanced(labels, point_adjustment(labels, scores), pred)
-
             entries.append(adj_eval_metrics)
             t_lst.append(t)
 
         avg_entries = np.average(np.array(entries), axis=0)
         std_entries = np.std(np.array(entries), axis=0)
 
-        entity_metric_lst.append(avg_entries)
-        entity_metric_std_lst.append(std_entries)
-
-        f = open(result_file, 'a')
-        print(f'data, auroc, std, aupr, std, best_f1, std, best_p, std, best_r, std, aff_p, std, '
-              f'aff_r, std, vus_r_auroc, std, vus_r_aupr, std, vus_roc, std, vus_pr, std, time, model',
-            file=f)
-        txt = '%s, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, ' \
-              '%.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, ' \
-              '%.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.1f, %s, %s '% \
-              (dataset_name, avg_entries[0], std_entries[0], avg_entries[1], std_entries[1],
-               avg_entries[2], std_entries[2], avg_entries[3], std_entries[3],
-               avg_entries[4], std_entries[4], avg_entries[5], std_entries[5],
-               avg_entries[6], std_entries[6], avg_entries[7], std_entries[7],
-               avg_entries[8], std_entries[8], avg_entries[9], std_entries[9],
-               avg_entries[10], std_entries[10], np.average(t_lst), args.model, str(model_configs))
-        print(txt)
-        print(txt, file=f)
-
-        f.close()
+        with open(result_file, 'a') as f:
+            print(f'data, auroc, std, aupr, std, best_f1, std, best_p, std, best_r, std, aff_p, std, '
+                  f'aff_r, std, vus_r_auroc, std, vus_r_aupr, std, vus_roc, std, vus_pr, std, time, model',
+                  file=f)
+            txt = '%s, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, ' \
+                  '%.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, ' \
+                  '%.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.1f, %s, %s ' % \
+                  (dataset_name, avg_entries[0], std_entries[0], avg_entries[1], std_entries[1],
+                   avg_entries[2], std_entries[2], avg_entries[3], std_entries[3],
+                   avg_entries[4], std_entries[4], avg_entries[5], std_entries[5],
+                   avg_entries[6], std_entries[6], avg_entries[7], std_entries[7],
+                   avg_entries[8], std_entries[8], avg_entries[9], std_entries[9],
+                   avg_entries[10], std_entries[10], np.average(t_lst), args.model, str(model_configs))
+            print(txt)
+            print(txt, file=f)
